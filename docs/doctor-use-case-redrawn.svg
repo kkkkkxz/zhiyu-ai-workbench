@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="640" viewBox="0 0 1000 640" role="img" aria-labelledby="title desc">
+  <title id="title">医生端用例图</title>
+  <desc id="desc">医生端用例图，连接线避开用例框和英文说明文字。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#333" />
+    </marker>
+    <style>
+      .line {
+        fill: none;
+        stroke: #333;
+        stroke-width: 1.5;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .arrow {
+        marker-end: url(#arrow);
+      }
+
+      .include {
+        stroke-dasharray: 6 5;
+      }
+
+      .case {
+        fill: #fff;
+        stroke: #333;
+        stroke-width: 1.4;
+      }
+
+      .text {
+        fill: #222;
+        font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+        font-size: 17px;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+
+      .actor-text {
+        font-size: 18px;
+      }
+
+      .include-text {
+        fill: #333;
+        font-family: Arial, sans-serif;
+        font-size: 15px;
+        text-anchor: middle;
+        dominant-baseline: middle;
+      }
+    </style>
+  </defs>
+
+  <rect width="1000" height="640" fill="#fff" />
+
+  <!-- Actor -->
+  <circle class="line" cx="90" cy="150" r="20" />
+  <path class="line" d="M90 170 V245" />
+  <path class="line" d="M45 200 H135" />
+  <path class="line" d="M90 245 L48 315" />
+  <path class="line" d="M90 245 L132 315" />
+  <text class="text actor-text" x="90" y="350">医生</text>
+
+  <!-- Use cases -->
+  <ellipse class="case" cx="330" cy="125" rx="95" ry="30" />
+  <text class="text" x="330" y="125">医生登录</text>
+
+  <ellipse class="case" cx="610" cy="125" rx="105" ry="30" />
+  <text class="text" x="610" y="125">验证登录</text>
+
+  <ellipse class="case" cx="330" cy="245" rx="105" ry="30" />
+  <text class="text" x="330" y="245">问诊接诊</text>
+
+  <ellipse class="case" cx="690" cy="245" rx="105" ry="30" />
+  <text class="text" x="690" y="245">问诊回复</text>
+
+  <ellipse class="case" cx="330" cy="365" rx="115" ry="30" />
+  <text class="text" x="330" y="365">电子病历管理</text>
+
+  <ellipse class="case" cx="690" cy="365" rx="105" ry="30" />
+  <text class="text" x="690" y="365">处方开具</text>
+
+  <ellipse class="case" cx="330" cy="485" rx="115" ry="30" />
+  <text class="text" x="330" y="485">健康档案查看</text>
+
+  <ellipse class="case" cx="690" cy="485" rx="115" ry="30" />
+  <text class="text" x="690" y="485">药品库存查看</text>
+
+  <!-- Doctor associations: routed through a clear left-side channel. -->
+  <path class="line arrow" d="M135 200 H190 V125 H235" />
+  <path class="line arrow" d="M135 200 H190 V245 H225" />
+  <path class="line arrow" d="M135 200 H190 V365 H215" />
+  <path class="line arrow" d="M135 200 H190 V485 H215" />
+
+  <!-- Functional associations between paired use cases. -->
+  <path class="line arrow" d="M435 245 H585" />
+  <path class="line arrow" d="M445 365 H585" />
+  <path class="line arrow" d="M445 485 H575" />
+
+  <!-- Include labels are placed away from dashed routes. -->
+  <text class="include-text" x="465" y="88">&lt;&lt;include&gt;&gt;</text>
+  <path class="line arrow include" d="M425 125 H505" />
+
+  <text class="include-text" x="477" y="180">&lt;&lt;include&gt;&gt;</text>
+  <path class="line arrow include" d="M436 234 C492 204, 537 174, 574 151" />
+
+  <text class="include-text" x="713" y="178">&lt;&lt;include&gt;&gt;</text>
+  <path class="line arrow include" d="M586 234 C552 202, 560 174, 595 152" />
+</svg>

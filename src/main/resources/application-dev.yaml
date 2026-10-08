@@ -1,0 +1,217 @@
+spring:
+  # 本地秘密文件：API Key / 数据库密码 走 D:\conf\zwsk\zwsk-secret.yaml（已加入 .gitignore）。
+  # 放在 dev profile 里，确保导入的文件能覆盖本文件其它默认值。
+  config:
+    import:
+      - "optional:file:D:/conf/zwsk/zwsk-secret.yaml"
+      - "optional:file:./conf/zwsk-secret.yaml"
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DB:zwskchat}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:zwsk}
+    password: ${MYSQL_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      validation-timeout: 3000
+      connection-test-query: SELECT 1
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 3s
+      lettuce:
+        pool:
+          max-active: 32
+          max-idle: 8
+          min-idle: 2
+  rabbitmq:
+    host: ${RABBIT_HOST:127.0.0.1}
+    port: ${RABBIT_PORT:5672}
+    username: ${RABBIT_USER:zwsk}
+    password: ${RABBIT_PASSWORD:}
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    connection-timeout: 5s
+management:
+  health:
+    mail:
+      enabled: false
+
+logging:
+  level:
+    root: INFO
+    com.zwskchat: DEBUG
+    # 临时开启 SDK DEBUG，看 OkHttp WebSocket 收到的 server 消息（task-started / result-generated / task-finished）
+    # TTS 排障定位完毕后可以改回 INFO 减噪
+    com.alibaba.dashscope: DEBUG
+    org.springframework.security: INFO
+
+# 开发环境外部服务（zwsk.storage 在文件下方靠近 zwsk.voice 处定义）
+zwsk:
+  vector:
+    qdrant:
+      host: ${QDRANT_HOST:127.0.0.1}
+      port: ${QDRANT_PORT:6333}
+      api-key: ${QDRANT_API_KEY:}
+      collection-prefix: ${QDRANT_COLLECTION_PREFIX:zwsk_kb}
+      distance: Cosine
+      connect-timeout-seconds: ${QDRANT_CONNECT_TIMEOUT_SECONDS:3}
+      request-timeout-seconds: ${QDRANT_REQUEST_TIMEOUT_SECONDS:10}
+      search-timeout-seconds: ${QDRANT_SEARCH_TIMEOUT_SECONDS:4}
+  ai:
+    retrieve-top-k: 12
+    context-top-k: 6
+    chunk-max-tokens: 400
+    chunk-overlap-tokens: 60
+    max-output-tokens: 1536
+    chat-timeout-seconds: 120
+    score-threshold: 0.30
+    # 语音问答里，RAG 最高分低于该值时视为“没有明确对应资料”，直接走通用大模型并 TTS 输出
+    voice-rag-explicit-score-threshold: ${AI_VOICE_RAG_EXPLICIT_SCORE_THRESHOLD:0.45}
+    # PDF 处理模式：prefill=true 使用文本模式（低成本），prefill=false 使用图片模式（高成本）
+    pdf-prefill-mode: ${AI_PDF_PREFILL:true}
+    # 默认全部走阿里云百炼 SDK；如需切回 OpenAI 兼容，把 provider 改为 openai-compat 即可。
+    # === API Key 占位符约定 ===
+    # 所有 AI 相关接口统一只认一个占位符：${DASHSCOPE_API_KEY:}。
+    # 仓库里 **不得** 出现任何真实的 sk-* 字符串。
+    # 取值链由 Spring PropertyResolver 决定，优先级从高到低：
+    #   1) spring.config.import 加载的外部 yaml 里的 key（最常用，运维推荐方式）
+    #        D:/conf/zwsk/zwsk-secret.yaml 内写：
+    #          DASHSCOPE_API_KEY: sk-xxx                 # 作为顶层 property
+    #        或等价的嵌套形式：
+    #          zwsk:
+    #            ai:
+    #              dashscope:
+    #                api-key: sk-xxx
+    #   2) 操作系统环境变量 DASHSCOPE_API_KEY
+    #   3) 均为空则默认 ""；运行时调用 LLM / 百炼会返回 401，看日志即可发现忘了注入
+    chat:
+      provider: dashscope-sdk
+      base-url: https://api.openai.com/v1
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: qwen-plus
+      temperature: 0.3
+    embedding:
+      provider: dashscope-sdk
+      base-url: https://api.openai.com/v1
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: text-embedding-v3
+      dimension: 1024
+      batch-size: 25
+    dashscope:
+      # 单一 API Key 同时给 chat / embedding / asr / tts 用
+      api-key: ${DASHSCOPE_API_KEY:}
+      region: china
+      chat-model: qwen-plus
+      embedding-model: text-embedding-v3
+  # ASR / TTS 不再单独配 base-url + api-key：
+  #   * 选用 dashscope-paraformer / dashscope-cosyvoice 时，自动复用 zwsk.ai.dashscope.api-key
+  #   * 选用 openai-whisper / openai-tts 时，走下方 zwsk.voice.openai.*
+  storage:
+    minio:
+      # dev 默认开启；secret 文件可在 D:/conf/zwsk/zwsk-secret.yaml 内重定向 access-key / secret-key
+      enabled: ${MINIO_ENABLED:true}
+      endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+      access-key: ${MINIO_ACCESS_KEY:}
+      secret-key: ${MINIO_SECRET_KEY:}
+      bucket: ${MINIO_BUCKET:zwsk-kb}
+      key-prefix: ${MINIO_KEY_PREFIX:kb}
+      max-file-size: 52428800
+  voice:
+    asr-provider: dashscope-paraformer
+    tts-provider: dashscope-cosyvoice
+    sample-rate: 16000
+    channels: 1
+    max-recording-seconds: 60
+    session-idle-timeout-seconds: 600
+    tts-min-sentence-chars: 12
+    # 服务端 VAD 兜底（HANDS_FREE）：嘈杂环境下避免持续高底噪把每帧都判成"有语音"
+    # 而导致 LISTENING 永远不退出。详见 VoiceSessionV3.observeServerVad。
+    server-vad:
+      speech-peak: ${VOICE_VAD_SPEECH_PEAK:350}
+      speech-rms: ${VOICE_VAD_SPEECH_RMS:90}
+      min-recording-ms: ${VOICE_VAD_MIN_RECORDING_MS:900}
+      silence-ms: ${VOICE_VAD_SILENCE_MS:1400}
+      # 噪声环境硬上限：再吵也最多录这么久就强制结束
+      max-turn-ms: ${VOICE_VAD_MAX_TURN_MS:15000}
+      # 每轮起手用作底噪估计的时长（毫秒）
+      noise-calibration-ms: ${VOICE_VAD_NOISE_CALIBRATION_MS:400}
+      noise-peak-multiplier: ${VOICE_VAD_NOISE_PEAK_MULTIPLIER:1.8}
+      noise-rms-multiplier: ${VOICE_VAD_NOISE_RMS_MULTIPLIER:2.2}
+      # 滑动窗口：最近 N 帧里至少 K 帧达标才认为"在说话"，过滤瞬时尖峰
+      speech-window-frames: ${VOICE_VAD_SPEECH_WINDOW_FRAMES:8}
+      speech-window-hits: ${VOICE_VAD_SPEECH_WINDOW_HITS:4}
+    public-jarvis:
+      # 免登录 Jarvis 语音入口。仅注入受限系统身份，不复用任何登录用户权限。
+      enabled: true
+      # 公开入口只在该租户边界内检索非 PRIVATE 的知识库。
+      tenant-id: ${JARVIS_PUBLIC_TENANT_ID:1}
+      user-id: ${JARVIS_PUBLIC_USER_ID:0}
+      username: ${JARVIS_PUBLIC_USERNAME:jarvis-public}
+    openai:
+      base-url: https://api.openai.com/v1
+      # 语音路径当前复用 DashScope 的 OpenAI 兼容网关，因此默认也读 DASHSCOPE_API_KEY。
+      # 若要切回官方 OpenAI，在外部 secret yaml 里显式设：
+      #   zwsk.voice.openai.api-key: sk-real-openai-xxx
+      # 即可覆盖本行。
+      api-key: ${DASHSCOPE_API_KEY:}
+      asr-model: whisper-1
+      tts-model: tts-1
+      tts-voice: alloy
+      tts-format: mp3
+    dashscope:
+      tts-model: cosyvoice-v2
+      tts-voice: longxiaochun_v2
+      # PCM 可以让前端边收边播，避免 MP3 整句解码带来的卡顿。
+      tts-format: pcm-16000hz-mono-16bit
+      # DashScope CosyVoice v2 的 speechRate 取值范围 [0.5, 2.0]，1.0 = 训练原始语速。
+      tts-speech-rate: 1.0
+      asr-model: paraformer-realtime-v2
+  # === dev 专用：开放 Swagger / Knife4j + 静态测试页面 ===
+  # 生产 yaml 默认 enabled=false 且不放行；dev profile 在这里整体重写 permit-urls
+  # （Spring 对 list 类型 properties 是替换不合并，所以必须把生产的也列上一遍）。
+  security:
+    cors:
+      allowed-origins:
+        - http://localhost:*
+        - http://127.0.0.1:*
+        - https://*.trycloudflare.com
+      ws-allowed-origins:
+        - http://localhost:*
+        - http://127.0.0.1:*
+        - https://*.trycloudflare.com
+    permit-urls:
+      # 与 application.yaml 保持一致的"必匿名"端点
+      - /auth/login
+      - /auth/tenants
+      - /auth/register
+      - /auth/refresh
+      - /auth/captcha
+      - /sso/exchange
+      - /personas
+      - /actuator/health
+      - /voice/ws
+      - /voice/ws/**
+      # dev only：API 文档
+      - /v3/api-docs/**
+      - /doc.html
+      - /swagger-ui/**
+      - /swagger-resources/**
+      - /webjars/**
+      # dev only：静态测试页面（含默认账号示例，不可在生产打包）
+      - /voice-demo.html
+      - /static/**
+
+# dev / test 环境开启 swagger
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

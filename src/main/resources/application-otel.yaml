@@ -1,0 +1,20 @@
+# =====================================================================
+# OpenTelemetry 追踪 profile（对应工程计划书“监控栈采用 OpenTelemetry + Prometheus”）
+#   启用方式：spring.profiles.active 包含 otel，例如
+#     java -jar app.jar --spring.profiles.active=prod,otel
+#   并通过环境变量指定 Collector 地址与采样率：
+#     OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+#     ZWSK_TRACING_SAMPLE_RATE=0.1
+#   说明：
+#     - metrics 仍由 Micrometer/Prometheus 暴露在 /actuator/prometheus（不依赖本 profile）；
+#     - 本 profile 仅开启分布式 trace 的 OTLP 导出；
+#     - endpoint 为空时不会导出（避免无谓连接）。
+# =====================================================================
+management:
+  tracing:
+    sampling:
+      probability: ${ZWSK_TRACING_SAMPLE_RATE:0.1}
+    enabled: true
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}

@@ -1,0 +1,38 @@
+# =====================================================================
+# OIDC 单点登录 profile（对应工程计划书“OAuth 2.0 + OIDC 接入企业统一身份源”）
+#   启用方式：spring.profiles.active 包含 oidc，例如
+#     java -jar app.jar --spring.profiles.active=prod,oidc
+#   与默认自管 JWT 链路并存：本 profile 仅新增一条 OAuth2 登录链路（OidcSecurityConfig，
+#   securityMatcher=/oauth2/**、/login/oauth2/**），登录成功后桥接到本系统 JWT。
+#
+#   生产请通过环境变量注入 IdP 客户端密钥，禁止写死：
+#     OIDC_CLIENT_ID / OIDC_CLIENT_SECRET / OIDC_ISSUER_URI
+# =====================================================================
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          enterprise:
+            client-id: ${OIDC_CLIENT_ID:}
+            client-secret: ${OIDC_CLIENT_SECRET:}
+            scope: openid,profile,email
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/enterprise"
+            client-name: Enterprise SSO
+        provider:
+          enterprise:
+            # 如 https://keycloak.example.com/realms/zwsk
+            issuer-uri: ${OIDC_ISSUER_URI:}
+
+# 本系统侧的身份映射规则（OidcProperties）
+zwsk:
+  oidc:
+    # 从哪个 OIDC claim 取本系统用户名（preferred_username / email / sub）
+    username-claim: ${OIDC_USERNAME_CLAIM:preferred_username}
+    # 从哪个 claim 取租户 code；留空则所有 OIDC 用户落 default-tenant-code
+    tenant-claim: ${OIDC_TENANT_CLAIM:}
+    default-tenant-code: ${OIDC_DEFAULT_TENANT_CODE:}
+    # 登录成功后回跳前端并回传 token（前端从 query 取 token/refreshToken 存本地）
+    success-redirect: ${OIDC_SUCCESS_REDIRECT:/}
+    failure-redirect: ${OIDC_FAILURE_REDIRECT:/login?oidc_error=1}

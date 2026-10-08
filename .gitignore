@@ -1,0 +1,66 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Secrets / runtime data ###
+.env
+.env.*
+!.env.example
+data/
+logs/
+*.log
+*.pem
+*.p12
+application-prod.yaml
+application-prod.yml
+# 本地运行时秘密文件 / 中间件数据目录（即便有人误把 D:\conf 拷到仓库里也不会被提交）
+zwsk-secret.yaml
+zwsk-secret.yml
+conf/
+/conf/
+# Edge CDP 临时 profile（浏览器自动化残留，不应提交）
+.tmp-edge-cdp-profile/
+# 部署证书目录
+deploy/certs/
+
+# Public repository hygiene: local/demo/private artifacts
+web/node_modules/
+web/dist/
+*.tsbuildinfo
+__pycache__/
+*.pyc
+*.bak
+*.doc
+*.docx
+老板必读.txt
+local-services/

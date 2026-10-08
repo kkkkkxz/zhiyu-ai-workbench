@@ -1,0 +1,261 @@
+server:
+  port: ${SERVER_PORT:8081}
+  servlet:
+    context-path: /api
+  tomcat:
+    max-http-form-post-size: 128MB
+    max-swallow-size: 128MB
+
+spring:
+  application:
+    name: zwskchat
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 100MB
+      max-request-size: 200MB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    default-property-inclusion: non_null
+  # === HikariCP 兜底默认值（生产 yaml 没显式配也有合理上限） ===
+  # 这里只放与"profile 无关"的池化参数；具体 url/username/password 仍由各 profile 注入。
+  # 命中场景：运维忘了在 application-prod.yaml 写 datasource.hikari.* 时，
+  # 不会退化成 Spring Boot 的"max-pool=10"小池子，避免 32 路并发就把库打爆。
+  datasource:
+    hikari:
+      # 生产典型业务 + 异步索引并发，30 是个安全余量；如果 LLM 流式 + RAG QPS 上来再调大。
+      maximum-pool-size: ${DB_POOL_MAX:30}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      # 拿不到连接时等 10s，超时直接抛异常（比无限等待更安全，让前端尽早看到 5xx 触发降级）
+      connection-timeout: 10000
+      # 空闲连接 10 分钟回收，最大寿命 30 分钟（小于 MySQL wait_timeout 默认 8h，避免连接断掉的"幽灵"）
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      validation-timeout: 3000
+      connection-test-query: SELECT 1
+      # 慢拿连接告警阈值：> 5s 拿不到就 WARN 入日志，便于发现池资源不足
+      leak-detection-threshold: 60000
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl
+  global-config:
+    db-config:
+      logic-delete-field: deleted
+      logic-not-delete-value: 0
+      logic-delete-value: 1
+      id-type: ASSIGN_ID
+  mapper-locations: classpath*:/mapper/**/*.xml
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 只暴露 K8s/Prometheus 必需端点。注意 prometheus 端点同样在 zwsk.security.permit-urls
+        # 里需要单独考虑：默认走 actuator-permit 配置；监控网络隔离做不到时建议加 IP 白名单。
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      # 详情对登录用户展示，避免匿名暴露依赖（DB/Redis/Rabbit 是否在线 = 系统拓扑泄漏）
+      show-details: when_authorized
+      # K8s 探针分组：liveness 探活（进程是否卡死）、readiness 探就绪（是否能接流量）。
+      # /actuator/health/liveness 对应 LivenessState；/actuator/health/readiness 对应 ReadinessState + DB/Redis/Rabbit。
+      probes:
+        enabled: true
+      group:
+        liveness:
+          # 只看应用自己的存活（线程死锁等），不挂依赖。Pod 没死不要重启。
+          include: livenessState
+        readiness:
+          # 依赖断了就摘流量（不再接新请求），避免 5xx 雪崩
+          include: readinessState,db,redis,rabbit
+  health:
+    # Spring Boot 3 默认会注册 LivenessState / ReadinessState bean，这里显式开启探针组
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  metrics:
+    tags:
+      # 给所有 metrics 打 application 标签，便于 Prometheus 多实例区分
+      application: ${spring.application.name}
+    distribution:
+      # 关键 HTTP 接口和 RAG/LLM 加直方图，便于做 P95/P99 SLI
+      percentiles-histogram:
+        http.server.requests: true
+      slo:
+        # SLO 阈值线（毫秒）：对比 P95/P99 看延迟分布
+        http.server.requests: 100ms,300ms,1s,3s
+  # === OpenTelemetry 分布式追踪（对应工程计划书“监控栈采用 OpenTelemetry + Prometheus”） ===
+  # Prometheus 负责 metrics（上方），OpenTelemetry 负责 traces，二者互补。
+  # 默认采样率 0 → 不产生/不导出任何 trace，零额外开销与零连接尝试。
+  # 接入时启用 'otel' profile（见 application-otel.yaml）或直接覆盖下列两项即可。
+  tracing:
+    sampling:
+      probability: ${ZWSK_TRACING_SAMPLE_RATE:0.0}
+
+# === 业务安全参数（可被环境变量覆盖） ===
+zwsk:
+  security:
+    jwt:
+      # 生产必须通过环境变量 JWT_SECRET 注入 >=64 字节随机字符串
+      # 未注入密钥时应用会拒绝启动；请通过环境变量或外部 secret 文件提供。
+      secret: ${JWT_SECRET:}
+      access-token-ttl-seconds: 7200      # 2h
+      refresh-token-ttl-seconds: 604800   # 7d
+      issuer: zwsk-voice-rag
+    login:
+      max-fail-count: 5
+      lock-minutes: 30
+    password:
+      bcrypt-strength: 10
+    # 仅放行"生产环境也必须匿名可访问"的端点。
+    # Swagger / Knife4j / static demo 等开发期工具默认不放行 —— 它们会暴露完整 API 列表
+    # 给攻击者，便于扫描；生产 profile 通过 springdoc.api-docs.enabled=false 直接关闭。
+    # 如需在 dev 环境下开放，请在 application-dev.yaml 里覆盖 zwsk.security.permit-urls
+    # 把下面的清单 + 开发工具路径整体重写（Spring 对 list 类型 properties 是替换不合并）。
+    permit-urls:
+      - /auth/login
+      - /auth/tenants
+      - /auth/register
+      - /auth/refresh
+      - /auth/captcha
+      - /sso/exchange
+      - /personas
+      # K8s 探针 + 负载均衡健康检查需要匿名访问；prometheus 端点放给监控网络抓取，
+      # 生产部署建议在 ingress 层面用网络策略限制 /actuator/** 仅监控 IP 段可达。
+      - /actuator/health
+      - /actuator/health/liveness
+      - /actuator/health/readiness
+      - /actuator/info
+      - /actuator/prometheus
+      # WebSocket 升级路径：语音 V3 握手由 VoiceV3HandshakeInterceptor 完成
+      - /voice/ws
+      - /voice/ws/**
+  ratelimit:
+    default-qps: 20
+    default-burst: 40
+  # 内容安全审核：对 LLM 输出做纵深防御
+  # - 语音路径：在 VoiceOrchestratorV3 做"句级"过滤，违规句不会进 TTS 队列、也不会推前端
+  # - 文字路径：在 ChatServiceImpl 做 full 文本兜底，命中发 moderation 事件让前端替换
+  # 运维如需接入阿里云内容安全 / OpenAI Moderation，只需替换 ContentSafetyService 的实现
+  content-safety:
+    enabled: true
+    # 命中后的礼貌拒绝文案（与 RagService 的 system prompt 第 5 条保持一致）
+    replacement: "抱歉，这个问题我无法回答，可以换一个话题。"
+    # 追加违禁词（与代码内置最小集合并、不区分大小写）
+    banned-words: []
+    # 追加违禁正则（大小写不敏感、UNICODE）
+    banned-patterns: []
+    log-on-block: true
+  audit:
+    enabled: true
+    async-queue-capacity: 4096
+  tenant:
+    enabled: true
+    column: tenant_id
+    ignore-tables:
+      - sys_tenant
+      - sys_permission
+      - sys_role_permission
+      - admin_apply
+      - biz_dispatch_assignee
+      - biz_schedule_participant
+      - biz_work_order_comment
+      - wf_task
+      - open_api_usage_log
+      - export_task
+      - tenant_feature_config
+      - tenant_ai_config
+      - sys_notification
+      - sys_notify_channel_config
+      - sys_oauth_provider
+      - sys_user_oauth
+      - open_api_key
+      - tpl_package
+      - ai_action_definition
+      - tpl_package_version
+  ingest:
+    async:
+      # M1.1: true=丢入 RabbitMQ 异步索引；false=同步索引（保留以便无 Rabbit 环境兜底）
+      enabled: true
+    exchange: zwsk.ingest.exchange
+    queue: zwsk.ingest.queue
+    routing-key: zwsk.ingest
+    dlq-exchange: zwsk.ingest.dlx
+    dlq: zwsk.ingest.dlq
+    dlq-routing-key: zwsk.ingest.dlq
+    retry:
+      max-attempts: 3
+      initial-interval-ms: 1000
+      multiplier: 2.0
+      max-interval-ms: 10000
+  # 对象存储默认关闭；开发环境装好 MinIO 后在 application-dev.yaml 里 enabled: true
+  storage:
+    minio:
+      enabled: false
+      endpoint: http://127.0.0.1:9000
+      access-key: ${MINIO_ACCESS_KEY:}
+      secret-key: ${MINIO_SECRET_KEY:}
+      bucket: zwsk-kb
+      key-prefix: kb
+      max-file-size: 52428800   # 50 MB
+      presigned-expiry-seconds: 600
+  stock:
+    enabled: ${STOCK_ENABLED:true}
+    # auto: 优先走国内腾讯行情公开接口（无需 Key）；不可用时，有 STOCK_API_KEY 再走 Twelve Data；
+    #       两者都不可用时走 mock 示例行情，方便先验证对话链路。
+    provider: ${STOCK_PROVIDER:auto}
+    base-url: ${STOCK_BASE_URL:https://api.twelvedata.com}
+    api-key: ${STOCK_API_KEY:}
+    delayed: ${STOCK_DELAYED:false}
+    request-timeout-seconds: ${STOCK_REQUEST_TIMEOUT_SECONDS:5}
+    cache-ttl-seconds: ${STOCK_CACHE_TTL_SECONDS:20}
+    max-companies-per-answer: ${STOCK_MAX_COMPANIES_PER_ANSWER:5}
+    companies:
+      - name: Apple
+        symbol: AAPL
+        provider-symbol: AAPL
+        market: NASDAQ
+        currency: USD
+        aliases: [apple, 苹果, 苹果公司]
+      - name: NVIDIA
+        symbol: NVDA
+        provider-symbol: NVDA
+        market: NASDAQ
+        currency: USD
+        aliases: [nvidia, 英伟达, 英伟达公司]
+      - name: Microsoft
+        symbol: MSFT
+        provider-symbol: MSFT
+        market: NASDAQ
+        currency: USD
+        aliases: [microsoft, 微软, 微软公司]
+      - name: Tencent Holdings
+        symbol: 00700.HK
+        provider-symbol: 0700.HK
+        market: HKEX
+        currency: HKD
+        aliases: [tencent, 腾讯, 腾讯控股]
+      - name: Alibaba
+        symbol: BABA
+        provider-symbol: BABA
+        market: NYSE
+        currency: USD
+        aliases: [alibaba, 阿里, 阿里巴巴]
+
+# Swagger / OpenAPI：默认关闭，避免生产环境暴露 API 文档给攻击者扫描。
+# - dev / test profile 想看接口文档：在 application-{profile}.yaml 里覆盖
+#   `springdoc.api-docs.enabled: true` 和 `springdoc.swagger-ui.enabled: true`，
+#   同时把对应路径加进 `zwsk.security.permit-urls`（list 替换不合并，需整体重写）。
+# - 即使 enabled=true，路径不在 permit-urls 中也只能登录后访问。
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

@@ -1,0 +1,64 @@
+# =============================================================================
+# Docker 构建上下文排除清单
+# =============================================================================
+# 安全要点：宁可漏掉也不能多塞——.env / 秘密 / 本地 conf 一旦进入构建上下文，
+# 即使最终镜像里没复制，也会出现在中间层和镜像 history 里被攻击者扒到。
+# =============================================================================
+
+# 秘密 / 本地配置
+.env
+.env.*
+!.env.example
+conf/
+zwsk-secret.yaml
+zwsk-secret.yml
+*.pem
+*.p12
+*.key
+application-prod.yaml
+application-prod.yml
+
+# 构建产物（runtime 不需要、会让镜像膨胀 + 造成版本混淆）
+target/
+**/target/
+*.jar
+*.war
+*.class
+
+# 前端项目（独立打包发布，不进 Spring Boot 镜像）
+web/node_modules/
+web/dist/
+web/.vite/
+
+# 中间件运行时数据（docker-compose 卷）
+data/
+logs/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Git / CI 元数据（构建用不到）
+.git/
+.gitignore
+.gitattributes
+.github/
+.gitlab-ci.yml
+
+# 文档与脚本（不进容器）
+docs/
+scripts/
+*.md
+!HELP.md
+docker/
+docker-compose*.yml
+Dockerfile*
+
+# Maven 包装器额外产物
+.mvn/wrapper/maven-wrapper.jar

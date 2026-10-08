@@ -1,0 +1,104 @@
+# =====================================================================
+# 知语 AI 后端 K8s 部署清单（对应工程计划书“系统部署与运维架构”）
+#   - Deployment：无状态后端，探针走 actuator
+#   - Service：集群内访问
+#   - HPA：按 CPU/内存自动水平扩缩容（计划书要求基于 Kubernetes HPA 扩缩容）
+# 说明：密钥通过 Secret 注入，禁止写死；镜像 tag 由 CI 替换。
+#   需在集群上 apply 并安装 metrics-server 后 HPA 才会生效。
+# =====================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zwskchat
+  labels:
+    app: zwskchat
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: zwskchat
+  template:
+    metadata:
+      labels:
+        app: zwskchat
+    spec:
+      containers:
+        - name: zwskchat
+          image: zwskchat:latest   # CI 替换为带版本 tag 的镜像
+          ports:
+            - containerPort: 8080
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: zwsk-secret
+                  key: jwt-secret
+            - name: ZWSK_AI_DASHSCOPE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: zwsk-secret
+                  key: dashscope-api-key
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /api/actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zwskchat
+  labels:
+    app: zwskchat
+spec:
+  selector:
+    app: zwskchat
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: zwskchat
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: zwskchat
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 60

@@ -1,0 +1,157 @@
+# ===================================================================
+# Docker / 一键部署 profile（SPRING_PROFILES_ACTIVE=docker）
+#
+# 设计原则（与 application-prod.yaml 的根本区别）：
+#   1) 零密钥：本文件不含任何真实 API Key / 密码，可安全提交到 Git；
+#   2) 全环境变量驱动：所有连接信息、凭据均来自环境变量，由 deploy.sh
+#      生成的 .env 注入，docker-compose 再传给容器；
+#   3) 服务名寻址：中间件 host 默认用 compose 服务名（mysql/redis/qdrant/
+#      rabbitmq/minio），容器间通过 compose 内部 DNS 互联，不写死 127.0.0.1。
+#
+# 启动期 StartupSecurityCheck 仍会校验弱口令；deploy.sh 自动生成强随机密钥，
+# 因此开箱即过检。运维只需在 .env 填一个真实的 DASHSCOPE_API_KEY。
+# ===================================================================
+
+spring:
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:mysql}:${MYSQL_PORT:3306}/${MYSQL_DB:zwskchat}?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USER:zwsk}
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_MAX:30}
+      minimum-idle: ${DB_POOL_MIN_IDLE:8}
+      connection-timeout: 10000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      validation-timeout: 3000
+      connection-test-query: SELECT 1
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      database: ${REDIS_DB:0}
+      timeout: 3s
+      lettuce:
+        pool:
+          max-active: 64
+          max-idle: 16
+          min-idle: 4
+  rabbitmq:
+    host: ${RABBIT_HOST:rabbitmq}
+    port: ${RABBIT_PORT:5672}
+    username: ${RABBIT_USER:zwsk}
+    password: ${RABBIT_PASSWORD}
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    connection-timeout: 5s
+
+zwsk:
+  security:
+    jwt:
+      secret: ${JWT_SECRET}
+      access-token-ttl-seconds: 7200
+      refresh-token-ttl-seconds: 604800
+      issuer: zwsk-voice-rag
+    cors:
+      # 同域部署（https://your-domain.com + /api 反代）通常不触发 CORS。
+      # 如果前端和 API 分不同域名，必须显式配置为前端 origin，例如：
+      # CORS_ALLOWED_ORIGINS=https://www.example.com,https://example.com
+      allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+      allowed-origin-patterns: ${CORS_ALLOWED_ORIGIN_PATTERNS:}
+  vector:
+    qdrant:
+      host: ${QDRANT_HOST:qdrant}
+      port: ${QDRANT_PORT:6333}
+      api-key: ${QDRANT_API_KEY:}
+      collection-prefix: ${QDRANT_COLLECTION_PREFIX:zwsk_kb}
+      distance: Cosine
+      connect-timeout-seconds: 3
+      request-timeout-seconds: 10
+      search-timeout-seconds: 4
+  ai:
+    retrieve-top-k: ${AI_RETRIEVE_TOP_K:8}
+    context-top-k: ${AI_CONTEXT_TOP_K:4}
+    chunk-max-tokens: 400
+    chunk-overlap-tokens: 60
+    max-output-tokens: ${AI_MAX_OUTPUT_TOKENS:1536}
+    chat-timeout-seconds: 120
+    score-threshold: 0.30
+    pdf-prefill-mode: true
+    chat:
+      provider: ${AI_CHAT_PROVIDER:dashscope-sdk}
+      base-url: ${AI_CHAT_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${AI_CHAT_MODEL:qwen-plus}
+      temperature: 0.3
+    embedding:
+      provider: ${AI_EMBED_PROVIDER:dashscope-sdk}
+      base-url: ${AI_EMBED_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${DASHSCOPE_API_KEY:}
+      model: ${AI_EMBED_MODEL:text-embedding-v3}
+      dimension: ${AI_EMBED_DIMENSION:1024}
+      batch-size: 25
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY:}
+      region: china
+      chat-model: ${AI_CHAT_MODEL:qwen-plus}
+      embedding-model: ${AI_EMBED_MODEL:text-embedding-v3}
+  voice:
+    asr-provider: ${VOICE_ASR_PROVIDER:dashscope-paraformer}
+    tts-provider: ${VOICE_TTS_PROVIDER:dashscope-cosyvoice}
+    sample-rate: 16000
+    channels: 1
+    max-recording-seconds: 60
+    session-idle-timeout-seconds: 600
+    tts-min-sentence-chars: 4
+    public-jarvis:
+      enabled: ${JARVIS_PUBLIC_ENABLED:false}
+      tenant-id: ${JARVIS_PUBLIC_TENANT_ID:1}
+      user-id: ${JARVIS_PUBLIC_USER_ID:0}
+      username: ${JARVIS_PUBLIC_USERNAME:jarvis-public}
+    openai:
+      base-url: ${VOICE_OPENAI_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${DASHSCOPE_API_KEY:}
+      asr-model: whisper-1
+      tts-model: tts-1
+      tts-voice: alloy
+      tts-format: mp3
+    dashscope:
+      tts-model: cosyvoice-v2
+      tts-voice: longxiaochun_v2
+      tts-format: pcm-16000hz-mono-16bit
+      tts-speech-rate: 1.1
+      asr-model: paraformer-realtime-v2
+  content-safety:
+    enabled: true
+    mode: ${CONTENT_SAFETY_MODE:both}
+    replacement: "抱歉，这个问题我无法回答，可以换一个话题。"
+    log-on-block: true
+  ingest:
+    async:
+      # MinIO/RabbitMQ 默认随 compose 一起启动，因此默认走异步索引。
+      enabled: ${INGEST_ASYNC_ENABLED:true}
+  storage:
+    minio:
+      enabled: ${MINIO_ENABLED:true}
+      endpoint: ${MINIO_ENDPOINT:http://minio:9000}
+      access-key: ${MINIO_ACCESS_KEY}
+      secret-key: ${MINIO_SECRET_KEY}
+      bucket: ${MINIO_BUCKET:zwsk-kb}
+      key-prefix: kb
+      max-file-size: 52428800
+
+# 生产环境关闭 API 文档，避免暴露完整接口列表
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    root: WARN
+    com.zwskchat: INFO
+    org.springframework.security: WARN

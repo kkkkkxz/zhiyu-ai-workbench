@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>展望 AI · 语音对话 Demo</title>
+  <style>
+    body{font-family:-apple-system,Segoe UI,Helvetica,Arial,"Microsoft YaHei",sans-serif;margin:24px;color:#222;}
+    h1{font-size:20px;margin:0 0 12px;}
+    .row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap;}
+    input,select,button,textarea{font-size:14px;padding:6px 10px;border:1px solid #cfd4dc;border-radius:6px;}
+    button{cursor:pointer;background:#3b82f6;color:#fff;border-color:#3b82f6;}
+    button.secondary{background:#fff;color:#3b82f6;}
+    button:disabled{opacity:.5;cursor:not-allowed;}
+    .panel{border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:12px 0;}
+    pre{white-space:pre-wrap;word-break:break-word;font-family:Menlo,Consolas,monospace;font-size:13px;background:#f6f8fa;padding:8px;border-radius:6px;max-height:240px;overflow:auto;}
+    .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef2ff;color:#4338ca;font-size:12px;}
+    .state{font-weight:600;color:#0ea5e9;}
+    .ref{font-size:13px;color:#64748b;border-left:3px solid #cbd5e1;padding-left:8px;margin:4px 0;}
+  </style>
+</head>
+<body>
+  <h1>展望数科 · 展望 AI 语音对话 Demo <span class="badge" id="state">IDLE</span></h1>
+
+  <div class="panel">
+    <div class="row">
+      <label>API Base</label>
+      <input id="apiBase" size="40" value="http://127.0.0.1:8080/api" />
+      <label>账号</label><input id="username" value="admin" />
+      <label>密码</label><input id="password" type="password" placeholder="请输入密码" />
+      <button id="loginBtn">登录</button>
+    </div>
+    <div class="row">
+      <label>知识库 ID（逗号分隔，可空）</label>
+      <input id="kbIds" size="20" placeholder="如 1,2" />
+      <button id="connectBtn" disabled>连接 WebSocket</button>
+      <button id="disconnectBtn" class="secondary" disabled>断开</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <button id="startBtn" disabled>① START（开始本轮）</button>
+      <button id="talkBtn" class="secondary" disabled>② 按住说话 / 松开停止</button>
+      <button id="endBtn" disabled>③ END（用户说完）</button>
+      <button id="interruptBtn" class="secondary" disabled>INTERRUPT</button>
+    </div>
+    <div class="row">状态：<span class="state" id="stateLine">未连接</span></div>
+  </div>
+
+  <div class="panel">
+    <div><b>ASR：</b> <span id="asr"></span></div>
+    <div style="margin-top:8px;"><b>AI 回答：</b><pre id="answer"></pre></div>
+    <div style="margin-top:8px;"><b>引用：</b><div id="refs"></div></div>
+    <div style="margin-top:8px;"><b>事件日志：</b><pre id="log"></pre></div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+let token = null;
+let ws = null;
+let audioCtx = null;
+let micNode = null;
+let processor = null;
+let stream = null;
+let recording = false;
+let ttsBuffers = []; // 每句的二进制片段
+let ttsFormat = 'mp3';
+
+function logEv(msg){ const t=$('log'); t.textContent += '\n' + msg; t.scrollTop=t.scrollHeight; }
+function setState(s){ $('state').textContent=s; $('stateLine').textContent=s; }
+
+// === 登录 ===
+$('loginBtn').onclick = async () => {
+  const base = $('apiBase').value.replace(/\/+$/,'');
+  const r = await fetch(base+'/auth/login', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({username:$('username').value, password:$('password').value})
+  });
+  const j = await r.json();
+  if (j.code !== 0) { alert('登录失败: '+j.message); return; }
+  token = j.data.accessToken;
+  $('connectBtn').disabled = false;
+  logEv('登录成功，token 已保存');
+};
+
+// === WebSocket 连接 ===
+$('connectBtn').onclick = () => {
+  const base = $('apiBase').value.replace(/\/+$/,'').replace(/^http/,'ws');
+  ws = new WebSocket(base+'/voice/ws/v3?token='+encodeURIComponent(token));
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    logEv('WS 已连接');
+    $('startBtn').disabled = false;
+    $('connectBtn').disabled = true;
+    $('disconnectBtn').disabled = false;
+  };
+  ws.onmessage = onWsMessage;
+  ws.onclose = (e) => {
+    logEv('WS 已关闭 code='+e.code);
+    setState('未连接');
+    ['startBtn','talkBtn','endBtn','interruptBtn','disconnectBtn'].forEach(id=>$(id).disabled=true);
+    $('connectBtn').disabled=false;
+  };
+  ws.onerror = e => logEv('WS 错误');
+};
+
+$('disconnectBtn').onclick = () => { if (ws) ws.close(); };
+
+function send(o){ if (ws && ws.readyState===1) ws.send(JSON.stringify(o)); }
+
+function onWsMessage(ev) {
+  if (typeof ev.data === 'string') {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    switch (m.type) {
+      case 'STATE': setState(m.state);
+        if (m.state==='LISTENING') { $('talkBtn').disabled=false; $('endBtn').disabled=false; }
+        else { $('talkBtn').disabled=true; $('endBtn').disabled=true; }
+        $('interruptBtn').disabled = (m.state!=='THINKING' && m.state!=='SPEAKING');
+        break;
+      case 'READY':
+        logEv('V3 READY: '+JSON.stringify(m.meta||{}));
+        break;
+      case 'SESSION':
+        logEv('会话 ID: '+m.sessionId);
+        break;
+      case 'ASR_PARTIAL': $('asr').textContent = m.text + '…'; break;
+      case 'ASR_FINAL': $('asr').textContent = m.text; break;
+      case 'REFERENCES':
+        $('refs').innerHTML = (m.references||[]).map((r,i)=>
+          `<div class="ref">[#${i+1}] ${r.title||''} (${(r.score||0).toFixed(3)})<br>${r.snippet||''}</div>`).join('');
+        break;
+      case 'LLM_DELTA': $('answer').textContent += m.text; break;
+      case 'LLM_DONE': logEv('LLM 完成 messageId='+m.messageId); break;
+      case 'TTS_BEGIN':
+        ttsBuffers = []; ttsFormat = m.audioFormat || 'mp3';
+        logEv('TTS 开始: '+(m.text||'').slice(0,40)+' fmt='+ttsFormat);
+        break;
+      case 'TTS_END': playTtsBuffers(); break;
+      case 'TURN_END': logEv('本轮结束: '+(m.state||'')); break;
+      case 'ERROR': logEv('错误: '+m.code+' '+m.text); break;
+      case 'PONG': break;
+      default: logEv('未知消息: '+m.type);
+    }
+  } else {
+    // 二进制：TTS 音频帧
+    ttsBuffers.push(new Uint8Array(ev.data));
+  }
+}
+
+// === START / END / INTERRUPT ===
+$('startBtn').onclick = () => {
+  $('answer').textContent=''; $('asr').textContent=''; $('refs').innerHTML='';
+  const kbStr = $('kbIds').value.trim();
+  const kbIds = kbStr ? kbStr.split(',').map(s=>parseInt(s.trim())).filter(n=>!isNaN(n)) : null;
+  send({type:'START_TURN', mode:'PTT', kbIds, sampleRate:16000, inputAudioFormat:'pcm-16khz-16bit-mono'});
+};
+$('endBtn').onclick = () => { stopRecord(); send({type:'AUDIO_END'}); };
+$('interruptBtn').onclick = () => { stopRecord(); send({type:'INTERRUPT'}); };
+
+// === 麦克风采集（PCM 16k 单声道，Int16 LE） ===
+$('talkBtn').onmousedown = $('talkBtn').ontouchstart = startRecord;
+$('talkBtn').onmouseup   = $('talkBtn').ontouchend   = stopRecord;
+$('talkBtn').onmouseleave = stopRecord;
+
+async function startRecord(){
+  if (recording) return;
+  if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate: 16000 });
+  await audioCtx.resume();
+  stream = await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,sampleRate:16000,echoCancellation:false,noiseSuppression:false,autoGainControl:true}});
+  micNode = audioCtx.createMediaStreamSource(stream);
+  processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  processor.onaudioprocess = e => {
+    if (!recording) return;
+    const f32 = e.inputBuffer.getChannelData(0);
+    const i16 = new Int16Array(f32.length);
+    for (let i=0;i<f32.length;i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    }
+    if (ws && ws.readyState===1) ws.send(i16.buffer);
+  };
+  micNode.connect(processor);
+  processor.connect(audioCtx.destination);
+  recording = true;
+  $('talkBtn').textContent = '🎙 正在录音... 松开发送';
+}
+function stopRecord(){
+  if (!recording) return;
+  recording = false;
+  $('talkBtn').textContent = '② 按住说话 / 松开停止';
+  if (processor) { try { processor.disconnect(); } catch(e){} }
+  if (micNode) { try { micNode.disconnect(); } catch(e){} }
+  if (stream) stream.getTracks().forEach(t=>t.stop());
+}
+
+// === TTS 播放（mp3 直接 Blob；pcm 用 AudioBuffer） ===
+async function playTtsBuffers(){
+  if (!ttsBuffers.length) return;
+  const total = ttsBuffers.reduce((n,b)=>n+b.byteLength,0);
+  const buf = new Uint8Array(total);
+  let off=0; for (const b of ttsBuffers){ buf.set(b, off); off+=b.byteLength; }
+  ttsBuffers = [];
+  if (ttsFormat.startsWith('pcm')) {
+    if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)({ sampleRate: 16000 });
+    const i16 = new Int16Array(buf.buffer, buf.byteOffset, buf.byteLength/2);
+    const f32 = new Float32Array(i16.length);
+    for (let i=0;i<i16.length;i++) f32[i] = i16[i] / 0x8000;
+    const ab = audioCtx.createBuffer(1, f32.length, 16000);
+    ab.copyToChannel(f32, 0);
+    const src = audioCtx.createBufferSource();
+    src.buffer = ab; src.connect(audioCtx.destination); src.start();
+  } else {
+    const blob = new Blob([buf], {type:'audio/'+ttsFormat});
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.play().catch(e => logEv('音频播放失败: '+e.message));
+  }
+}
+</script>
+</body>
+</html>
